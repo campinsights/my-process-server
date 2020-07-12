@@ -35,3 +35,13 @@ void read_string(int fd, char *str, int max_size)
         str[max_size - 1] = in_char;
     }
 }
+
+void write_int(int fd, int *int_to_write)
+{
+    write(fd, int_to_write, sizeof(int));
+}
+
+void read_int(int fd, int *int_to_read)
+{
+    read(fd, int_to_read, sizeof(int));
+}
