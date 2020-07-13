@@ -1,11 +1,13 @@
 #include "myos_headers.h"
 #include "msg_handlers.h"
 #include <stdbool.h>
+#include <time.h>
 
 #define UNUSED -1
 
 struct client {
     int PID;
+    time_t start_time;
     char mailbox_name[STRING_SIZE];
     char fifo_name[STRING_SIZE];
     int fd_outgoing;
@@ -13,7 +15,7 @@ struct client {
 
 /* -----~~~~~===== define necessary global variables =====~~~~~----- */
 int nextPID = 0;     // next available client process PID
-int fd_incoming;     // file pointer for incoming server FIFO
+int fd_syscall, fd_commchannel; // file pointers for incoming server FIFOs
 int syscall_code;    // most recent incoming system call code
 int connections = 0; // how many connected client processes
 bool running = true; // whether the process server is supposed to
@@ -26,17 +28,19 @@ void connectProcess(struct client *my_client)
     // CONNECT has two parameters -- int: linux PID, C-string: mailbox name
     int processLinuxPID;
     // read first parameter:
-    read_int(fd_incoming, &processLinuxPID);
+    read_int(fd_syscall, &processLinuxPID);
     // construct client FIFO name:
     sprintf(my_client->fifo_name, CLIENT_FIFO, processLinuxPID);
     // read mailbox name:
-    read_string(fd_incoming, my_client->mailbox_name, STRING_SIZE);
+    read_string(fd_syscall, my_client->mailbox_name, STRING_SIZE);
     // give client process a new PID:
-    printf("myOS: connecting client process #%d\n", nextPID);
+    printf("myOS: connecting Host-OS process #%d\n", processLinuxPID);
     my_client->PID = nextPID;
     nextPID = (nextPID + 1) % MAX_CLIENTS;
+    // assign client process a start time:
+    time(&(my_client->start_time));
     // report client connection:
-    printf("myOS: host OS process #%d has connected with mailbox %s\n", processLinuxPID, my_client->mailbox_name);
+    printf("myOS: client process #%d has connected with mailbox %s at time %s\n", my_client->PID, my_client->mailbox_name, ctime(&(my_client->start_time)));
     // open client FIFO:
     my_client->fd_outgoing = open(my_client->fifo_name, O_WRONLY);
     // report successful client connection:
@@ -56,9 +60,9 @@ void connect_fail()
     char param_string[STRING_SIZE];
     // we need to flush the info from the server FIFO so we can
     // service the next system call:
-    read_int(fd_incoming, &clientPID);
+    read_int(fd_syscall, &clientPID);
     printf("myOS: rejecting connection from Linux process %d -- too many clients connected", clientPID);
-    read_string(fd_incoming, param_string, STRING_SIZE);
+    read_string(fd_syscall, param_string, STRING_SIZE);
     printf("myOS: rejecting request to connect mailbox %s", param_string);
     // TODO: add code to connect client FIFO long enough to send an error code
 }
@@ -88,21 +92,25 @@ int main()
         clients[i].PID = UNUSED;
     
     // "start up" the process server by creating 
-    // a named FIFO for incoming server connections:
-    mkfifo(SERVER_FIFO, FIFO_MODE);
-    printf("myOS: creating server FIFO at %s\n", SERVER_FIFO);
+    // named FIFO's for incoming connections:
+    mkfifo(SERVER_FIFO_1, FIFO_MODE);
+    printf("myOS: creating syscall FIFO at %s\n", SERVER_FIFO_1);
+    mkfifo(SERVER_FIFO_2, FIFO_MODE);
+    printf("myOS: creating comm-channel FIFO at %s\n", SERVER_FIFO_2);
 
     while(running)
     {
         // if we get here, we have no open connections, so...
         // open FIFO for reading incoming connections:
-        printf("myOS: opening server FIFO at %s\n", SERVER_FIFO);
-        fd_incoming = open(SERVER_FIFO, O_RDONLY);
+        printf("myOS: opening syscall FIFO at %s\n", SERVER_FIFO_1);
+        fd_syscall = open(SERVER_FIFO_1, O_RDONLY);
+        printf("myOS: opening comm-channel FIFO at %s\n", SERVER_FIFO_2);
+        fd_commchannel = open(SERVER_FIFO_2, O_RDONLY);
 
         // keep reading from request pipeline until we get a CONNECT request:
         do {
             printf("myOS: attempting read from server FIFO...");
-            read_int(fd_incoming, &syscall_code);
+            read_int(fd_syscall, &syscall_code);
             printf("read syscall %03o\n", syscall_code);
         }
         while(syscall_code != SYSCALL_CONNECT);
@@ -119,23 +127,25 @@ int main()
             int param_int; // several syscalls send an integer parameter
             char param_string[STRING_SIZE]; // several syscalls send a string parameter
             char mailbox_name[STRING_SIZE]; // the SEND syscall also identifies a target mailbox
-            char response[STRING_SIZE*2]; // this is the response we echo back to the client process
+            char response_string[STRING_SIZE*2]; // this is the response we echo back to the client process
+            int response_int;
             
             // read a system call from the FIFO:
             printf("myOS: attempting read from server FIFO...");
-            read_int(fd_incoming, &syscall_code);
+            read_int(fd_syscall, &syscall_code);
             printf("read syscall %03o\n", syscall_code);
             // if this is not a new process connecting, 
             // we also need to read the process' PID:
             if(syscall_code != SYSCALL_CONNECT) {
                 printf("myOS: reading client PID...");
-                read_int(fd_incoming, &clientPID); 
+                read_int(fd_syscall, &clientPID); 
                 printf("read PID %d\n", clientPID);  
             }
-             
 
-            switch(syscall_code)
+            if(clientPID < MAX_CLIENTS && clients[clientPID].PID != UNUSED)
             {
+                switch(syscall_code)
+                {
                 case SYSCALL_CONNECT:
                     // if there are any available slots, clients[nextPID].PID will equal the UNUSED flag
                     if(clients[nextPID].PID == UNUSED)
@@ -159,46 +169,46 @@ int main()
                         // otherwise, we just disconnect the client process.
                         disconnectProcess(&(clients[clientPID]));
                     break;
-                case SYSCALL_DISCONNECT:
+                case SYSCALL_EXIT:
                     disconnectProcess(&(clients[clientPID]));
                     break;
                 case SYSCALL_PING:
                     // syscall PING has one parameter: the integer code that we are to
                     // "bounce" back to the client
-                    read_int(fd_incoming, &param_int);
+                    read_int(fd_syscall, &param_int);
                     printf("myOS: received ping from process %d with code %d\n", clientPID, param_int);
-                    sprintf(response, "Received PING with code %d", param_int);
-                    write_string(clients[clientPID].fd_outgoing, response);
+                    sprintf(response_string, "Received PING with code %d", param_int);
+                    write_string(clients[clientPID].fd_outgoing, response_string);
                     break;
                 case SYSCALL_CONFIGURE:
                     printf("myOS: received CONFIGURE request for mailbox %s\n", clients[clientPID].mailbox_name);
                     // syscall CONFIGURE has n + 1 parameters, where n is the first byte after the syscall
-                    read_int(fd_incoming, &param_int);
+                    read_int(fd_syscall, &param_int);
                     printf("myOS: receiving %d configuration strings...\n", param_int);
-                    sprintf(response, "Received CONFIGURE request for mailbox %s with %d configuration strings", clients[clientPID].mailbox_name, param_int);
-                    write_string(clients[clientPID].fd_outgoing, response);
+                    sprintf(response_string, "Received CONFIGURE request for mailbox %s with %d configuration strings", clients[clientPID].mailbox_name, param_int);
+                    write_string(clients[clientPID].fd_outgoing, response_string);
                     for(int i = 0; i < param_int; i++)
                     {
-                        read_string(fd_incoming, param_string, STRING_SIZE);
+                        read_string(fd_commchannel, param_string, STRING_SIZE);
                         printf("myOS: configuring %s.\n", param_string);
-                        sprintf(response, "Configuring %s", param_string);
-                        write_string(clients[clientPID].fd_outgoing, response);
+                        sprintf(response_string, "Configuring %s", param_string);
+                        write_string(clients[clientPID].fd_outgoing, response_string);
                     }
                     break;
                 case SYSCALL_SEND:
                     // syscall SEND has a C-string mailbox name as first parameter:
-                    read_string(fd_incoming, mailbox_name, STRING_SIZE);
+                    read_string(fd_syscall, mailbox_name, STRING_SIZE);
                     // the next byte specifies the number of C-string messages to read:
-                    read_int(fd_incoming, &param_int);
+                    read_int(fd_syscall, &param_int);
                     printf("myOS: received request from process %d to send %d messages to mailbox %s\n", clientPID, param_int, mailbox_name);
-                    sprintf(response, "Received request to SEND %d messages to mailbox %s.\n", param_int, mailbox_name);
-                    write_string(clients[clientPID].fd_outgoing, response);
+                    sprintf(response_string, "Received request to SEND %d messages to mailbox %s.\n", param_int, mailbox_name);
+                    write_string(clients[clientPID].fd_outgoing, response_string);
                     for(int i = 0; i < param_int; i++)
                     {
-                        read_string(fd_incoming, param_string, STRING_SIZE);
+                        read_string(fd_commchannel, param_string, STRING_SIZE);
                         printf("myOS: message %d = \"%s\".\n", i+1, param_string);
-                        sprintf(response, "Received message \"%s\"", param_string);
-                        write_string(clients[clientPID].fd_outgoing, response);
+                        sprintf(response_string, "Received message \"%s\"", param_string);
+                        write_string(clients[clientPID].fd_outgoing, response_string);
                     }
                     break;
                 case SYSCALL_CHECK:
@@ -207,31 +217,50 @@ int main()
                     // for now, we will just return a random single-digit number:
                     param_int = (rand() % 10);
                     printf("myOS: pretending we have %d messages for mailbox %s\n", param_int, clients[clientPID].mailbox_name);
-                    sprintf(response, "You have %d messages waiting", param_int);
-                    write_string(clients[clientPID].fd_outgoing, response);
+                    sprintf(response_string, "You have %d messages waiting", param_int);
+                    write_string(clients[clientPID].fd_outgoing, response_string);
                 break;
                 case SYSCALL_FETCH:
                     printf("myOS: received FETCH request for mailbox %s\n", clients[clientPID].mailbox_name);
                     // syscall FETCH is supposed to return the first message in the queue;
                     // for now, we will just return the string "DUMMY MESSAGE":
-                    sprintf(response, "Message for you: \"%s\"", "DUMMY MESSAGE");
-                    write_string(clients[clientPID].fd_outgoing, response);
+                    sprintf(response_string, "Message for you: \"%s\"", "DUMMY MESSAGE");
+                    write_string(clients[clientPID].fd_outgoing, response_string);
+                break;
+                case SYSCALL_GETPID:
+                    // look up process PID:
+                    response_int = clients[clientPID].PID;
+                    printf("myOS: received GETPID request from process %d; returning value %d\n", clientPID, response_int);
+                    write_int(clients[clientPID].fd_outgoing, &response_int);
+                break;
+                case SYSCALL_GETAGE:
+                    // determine process age:
+                    response_int = time(NULL) - clients[clientPID].start_time;
+                    printf("myOS: received GETAGE request from process %d; process has been alive %d seconds\n", clientPID, response_int);
+                    write_int(clients[clientPID].fd_outgoing, &response_int);
                 break;
                 default:
                     printf("myOS: received unknown system call %o from process %d\n", syscall_code, clientPID);
-                    sprintf(response, "Received unknown system call %o", syscall_code);
-                    write_string(clients[clientPID].fd_outgoing, response);
+                    sprintf(response_string, "Received unknown system call %o", syscall_code);
+                    write_string(clients[clientPID].fd_outgoing, response_string);
+                }
+            }
+            else
+            {
+                printf("myOS: received request from invalid process ID number %d\n", clientPID);
             }
         }
 
         // if we reach this point there are no current connections, 
-        // input will be undefined, so we need to close and re-open server FIFO
-        close(fd_incoming);
+        // input will be undefined, so we need to close and re-open server FIFOs
+        close(fd_syscall);
+        close(fd_commchannel);
     }
 
     // if we reach this point we are done with our FIFO file, so...
     // delete the server FIFO:  
-    unlink(SERVER_FIFO);
+    unlink(SERVER_FIFO_1);
+    unlink(SERVER_FIFO_2);
 
     return 0;
 }
