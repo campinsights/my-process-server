@@ -11,6 +11,8 @@ struct client {
     char mailbox_name[STRING_SIZE];
     char fifo_name[STRING_SIZE];
     int fd_outgoing;
+    int join_PID;
+    int wait_PID;
 } clients[MAX_CLIENTS];
 
 /* -----~~~~~===== define necessary global variables =====~~~~~----- */
@@ -70,10 +72,22 @@ void connect_fail()
 /* the following function disconnects from a client process */
 void disconnectProcess(struct client *my_client)
 {
+    // first, find out if any process has JOINed my_client
+    // and send any that have a no-error (0) signal:
+    for(int i = 0; i < MAX_CLIENTS; i++)
+        if(clients[i].join_PID == my_client->PID)
+        {
+            clients[i].join_PID == UNUSED;
+            int response_int = 0;
+            write_int(clients[i].fd_outgoing, &response_int);
+        }
+    // now, disconnect my_client by closing FIFOs and 
+    // marking this array slot and its file descriptor as UNUSED:
     printf("myOS: disconnecting from client %d.\n", my_client->PID);
     write_string(my_client->fd_outgoing, "DISCONNECTING. Goodbye.");
     close(my_client->fd_outgoing);
     my_client->PID = UNUSED;
+    my_client->fd_outgoing = UNUSED;
     // note that we are now connected to one fewer client process:
     connections--;
     printf("myOS: connected to %d clients\n", connections);
@@ -89,7 +103,12 @@ int main()
 
     // initialize all client PID's to the unused flag:
     for(int i = 0; i < MAX_CLIENTS; i++)
+    {
         clients[i].PID = UNUSED;
+        clients[i].join_PID = UNUSED;
+        clients[i].wait_PID = UNUSED;
+        clients[i].fd_outgoing = UNUSED;
+    }
     
     // "start up" the process server by creating 
     // named FIFO's for incoming connections:
@@ -134,25 +153,36 @@ int main()
             printf("myOS: attempting read from server FIFO...");
             read_int(fd_syscall, &syscall_code);
             printf("read syscall %03o\n", syscall_code);
-            // if this is not a new process connecting, 
-            // we also need to read the process' PID:
+            
             if(syscall_code != SYSCALL_CONNECT) {
+                // if this is not a new process connecting, 
+                // we also need to read the process' PID:
                 printf("myOS: reading client PID...");
                 read_int(fd_syscall, &clientPID); 
-                printf("read PID %d\n", clientPID);  
+                printf("read PID %d\n", clientPID); 
+                // and then we need to issue the client a "lock" for the 
+                // comm-channel FIFO for sending subsequent parameters;
+                // this is simply done by echoing the client PID:
+                printf("myOS: issuing lock to client %d to complete syscall %03o\n", clientPID, syscall_code);
+                write_int(clients[clientPID].fd_outgoing, &clientPID);
             }
+            else
+            {
+                // if there are any available slots, clients[nextPID].PID will equal the UNUSED flag
+                if(clients[nextPID].PID == UNUSED)
+                    connectProcess(&(clients[nextPID]));
+                else
+                    // otherwise, handle the failure gracefully:
+                    connect_fail();
+            }
+            
 
             if(clientPID < MAX_CLIENTS && clients[clientPID].PID != UNUSED)
             {
                 switch(syscall_code)
                 {
                 case SYSCALL_CONNECT:
-                    // if there are any available slots, clients[nextPID].PID will equal the UNUSED flag
-                    if(clients[nextPID].PID == UNUSED)
-                        connectProcess(&(clients[nextPID]));
-                    else
-                        // otherwise, handle the failure gracefully:
-                        connect_fail();
+                    // nothing to do here
                     break;
                 case SYSCALL_SHUTDOWN:
                     printf("myOS: received shutdown request\n");
@@ -175,7 +205,7 @@ int main()
                 case SYSCALL_PING:
                     // syscall PING has one parameter: the integer code that we are to
                     // "bounce" back to the client
-                    read_int(fd_syscall, &param_int);
+                    read_int(fd_commchannel, &param_int);
                     printf("myOS: received ping from process %d with code %d\n", clientPID, param_int);
                     sprintf(response_string, "Received PING with code %d", param_int);
                     write_string(clients[clientPID].fd_outgoing, response_string);
@@ -183,7 +213,7 @@ int main()
                 case SYSCALL_CONFIGURE:
                     printf("myOS: received CONFIGURE request for mailbox %s\n", clients[clientPID].mailbox_name);
                     // syscall CONFIGURE has n + 1 parameters, where n is the first byte after the syscall
-                    read_int(fd_syscall, &param_int);
+                    read_int(fd_commchannel, &param_int);
                     printf("myOS: receiving %d configuration strings...\n", param_int);
                     sprintf(response_string, "Received CONFIGURE request for mailbox %s with %d configuration strings", clients[clientPID].mailbox_name, param_int);
                     write_string(clients[clientPID].fd_outgoing, response_string);
@@ -197,9 +227,9 @@ int main()
                     break;
                 case SYSCALL_SEND:
                     // syscall SEND has a C-string mailbox name as first parameter:
-                    read_string(fd_syscall, mailbox_name, STRING_SIZE);
+                    read_string(fd_commchannel, mailbox_name, STRING_SIZE);
                     // the next byte specifies the number of C-string messages to read:
-                    read_int(fd_syscall, &param_int);
+                    read_int(fd_commchannel, &param_int);
                     printf("myOS: received request from process %d to send %d messages to mailbox %s\n", clientPID, param_int, mailbox_name);
                     sprintf(response_string, "Received request to SEND %d messages to mailbox %s.\n", param_int, mailbox_name);
                     write_string(clients[clientPID].fd_outgoing, response_string);
@@ -239,8 +269,63 @@ int main()
                     printf("myOS: received GETAGE request from process %d; process has been alive %d seconds\n", clientPID, response_int);
                     write_int(clients[clientPID].fd_outgoing, &response_int);
                 break;
+                case SYSCALL_JOINPID:
+                    // syscall JOINPID has one parameter: the PID of the process to "join"
+                    read_int(fd_commchannel, &param_int);
+                    // only proceed if the specified PID is a "live" process:
+                    if(clients[param_int].PID != UNUSED)
+                    {
+                        printf("myOS: received request from process %d to JOIN process %d\n", clientPID, param_int);
+                        clients[clientPID].join_PID = param_int;
+                    }
+                    else
+                    {
+                        printf("myOS: received request from process %d to JOIN invalid process ID %d\n", clientPID, param_int);
+                        response_int = -1;
+                        write_int(clients[clientPID].fd_outgoing, &response_int);
+                    }
+                break;
+                case SYSCALL_WAIT:
+                    // syscall WAIT has one parameter: the PID of the process 
+                    // to "wait" for a signal from:
+                    read_int(fd_commchannel, &param_int);
+                    // only proceed if the specified PID is a "live" process:
+                    if(clients[param_int].PID != UNUSED)
+                    {
+                        printf("myOS: received request from process %d to WAIT for SIGNAL from process %d\n", clientPID, param_int);
+                        clients[clientPID].wait_PID = param_int;
+                    }
+                    else
+                    {
+                        printf("myOS: received request from process %d to WAIT on invalid process ID %d\n", clientPID, param_int);
+                        response_int = -1;
+                        write_int(clients[clientPID].fd_outgoing, &response_int);
+                    }
+                break;
+                case SYSCALL_SIGNAL:
+                    // syscall SIGNAL has one parameter: the PID of the process 
+                    // to send a "signal" to:
+                    read_int(fd_commchannel, &param_int);
+                    // only proceed if the specified PID is actually waiting for a signal from this client:
+                    if(clients[param_int].wait_PID == clientPID)
+                    {
+                        printf("myOS: received SIGNAL from process %d to WAITing process %d\n", clientPID, param_int);
+                        // clear the wait_PID for the WAITing client:
+                        clients[param_int].wait_PID = UNUSED;
+                        // send success (0) signals back to both clients:
+                        response_int = 0;
+                        write_int(clients[param_int].fd_outgoing, &response_int);
+                        write_int(clients[clientPID].fd_outgoing, &response_int);
+                    }
+                    else
+                    {
+                        printf("myOS: received request from process %d to SIGNAL non-waiting process ID %d\n", clientPID, param_int);
+                        response_int = -1;
+                        write_int(clients[clientPID].fd_outgoing, &response_int);
+                    }
+                break;
                 default:
-                    printf("myOS: received unknown system call %o from process %d\n", syscall_code, clientPID);
+                    printf("myOS: received unknown system call %03o from process %d\n", syscall_code, clientPID);
                     sprintf(response_string, "Received unknown system call %o", syscall_code);
                     write_string(clients[clientPID].fd_outgoing, response_string);
                 }

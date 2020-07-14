@@ -14,6 +14,8 @@ void send(int syscall_code)
     printf("<- Sending syscall %03o to process server\n", syscall_code);
     write_int(fd_syscall, &syscall_code);
     write_int(fd_syscall, &my_client_PID);
+    // wait for the server to issue a "lock" before we proceed:
+    read_int(fd_incoming, &response_int);
 }
 
 void read_string_and_echo()
@@ -74,7 +76,7 @@ int main()
     while (syscall_code != SYSCALL_EXIT && syscall_code != SYSCALL_SHUTDOWN)
     {
         // enter interactive mode by printing a menu:
-        printf("\n--------------------------------------------------------------------------------\n");
+        printf("\n--------------------------------------------------------------------------------\n\n");
         printf("Enter a system call (%d = ping server, ", SYSCALL_PING);
         printf("%d = disconnect and exit, %d = kill server and exit,\n", SYSCALL_EXIT, SYSCALL_SHUTDOWN);
         printf("%d = send message, %d = check for messages, ", SYSCALL_SEND, SYSCALL_CHECK);
@@ -83,7 +85,7 @@ int main()
         printf("%d = wait PID, %d = signal PID): ", SYSCALL_WAIT, SYSCALL_SIGNAL);
         // read user's choice:
         scanf("%d", &syscall_code);
-        printf("\n--------------------------------------------------------------------------------\n");
+        printf("\n--------------------------------------------------------------------------------\n\n");
         
         // send system call and PID to process server:
         send(syscall_code);
@@ -92,6 +94,7 @@ int main()
         char key[STRING_SIZE/2], value[STRING_SIZE/2]; // key-value pairs for CONFIGURE syscall
         char send_string[STRING_SIZE]; // several syscalls require sending a string
         int send_int; // several syscalls send an integer parameter
+        int response_int; // response code from server
 
         // now respond to the user's choice more specifically:
         switch(syscall_code)
@@ -115,7 +118,7 @@ int main()
                  * one parameter: int (here chosen randomly) */
                 send_int = rand();
                 printf("<- Sending ping with code %d\n", send_int);
-                write_int(fd_syscall, &send_int);
+                write_int(fd_commchannel, &send_int);
                 // read and echo server response:
                 read_string_and_echo();
                 break;
@@ -127,7 +130,7 @@ int main()
                  * parameters: int: # of settings,        *
                  * list of C-strings: settings themselves */ 
                 printf("<- Sending CONFIGURE %d request to server\n", send_int);
-                write_int(fd_syscall, &send_int);
+                write_int(fd_commchannel, &send_int);
                 // read and echo server response:
                 read_string_and_echo();
                 // now handle the individual settings:
@@ -159,8 +162,8 @@ int main()
                  * byte: number of C-strings to send      *
                  * list of C-strings: messages themselves */ 
                 printf("Sending SEND %s:%d request to server\n", send_string, send_int);
-                write_string(fd_syscall, send_string);
-                write_int(fd_syscall, &send_int);
+                write_string(fd_commchannel, send_string);
+                write_int(fd_commchannel, &send_int);
                 // read and echo server response:
                 read_string_and_echo();
                 // clear the trailing newline character from the input buffer:
@@ -197,13 +200,54 @@ int main()
                 /* send syscall GETPID                     *
                  * no parameters                           */
                 printf("<- Sent GETPID request to server\n");
-                read_int_and_echo();
+                read_int(fd_incoming, &response_int);
+                printf("This process' PID is %d\n", response_int);
                 break;
             case SYSCALL_GETAGE:
                 /* send syscall GETPID                     *
                  * no parameters                           */
                 printf("<- Sent GETAGE request to server\n");
-                read_int_and_echo();
+                read_int(fd_incoming, &response_int);
+                printf("This process' age is %d seconds\n", response_int);
+                break;
+            case SYSCALL_JOINPID:
+                /* send syscall JOINPID                    *
+                 * one parameter: int PID to join          */
+                printf("What process ID do you want to JOIN? ");
+                scanf("%d", &send_int);
+                printf("<- Telling server to wake me up when process %d EXITs\n", send_int);
+                write_int(fd_commchannel, &send_int);
+                read_int(fd_incoming, &response_int);
+                if(response_int < 0)
+                    printf("-> Server returned an error: invalid PID\n");
+                else
+                    printf("-> Process %d has EXITed successfully\n", send_int);
+                break;
+            case SYSCALL_WAIT:
+                /* send syscall WAIT                       *
+                 * one parameter: int PIT to wait for      */
+                printf("What process ID do you want to WAIT for a SIGNAL from? ");
+                scanf("%d", &send_int);
+                printf("<- Telling server to wake me up on a SIGNAL form process %d\n", send_int);
+                write_int(fd_commchannel, &send_int);
+                read_int(fd_incoming, &response_int);
+                if(response_int < 0)
+                    printf("-> Server returned an error: invalid PID\n");
+                else
+                    printf("-> Process %d has SIGNALed successfully\n", send_int);
+                break;
+            case SYSCALL_SIGNAL:
+                /* send syscall SIGNAL                     *
+                 * one parameter: int PID to signal to     */
+                printf("What process ID do you want to send a SIGNAL to? ");
+                scanf("%d", &send_int);
+                printf("<- Telling server to SIGNAL process #%d\n", send_int);
+                write_int(fd_commchannel, &send_int);
+                read_int(fd_incoming, &response_int);
+                if(response_int < 0)
+                    printf("-> Server returned an error: specified process was not WAITing for a SIGNAL\n");
+                else
+                    printf("-> Process %d has received the SIGNAL successfully\n", send_int);
                 break;
             default:
                 printf("%d is not a valid system call\n", syscall_code);
