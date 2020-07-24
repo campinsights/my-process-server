@@ -1,5 +1,5 @@
-#ifndef MSG_H_INCLUDED
-#define MSG_H_INCLUDED
+#ifndef FIO_H_INCLUDED
+#define FIO_H_INCLUDED
 
 void write_string(int fd, char *str);
 

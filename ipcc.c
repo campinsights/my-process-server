@@ -1,4 +1,4 @@
-#include "myos_headers.h"
+#include "ipc_headers.h"
 #include "msg_handlers.h"
 
 /* ---------- define key communication variables ---------- */

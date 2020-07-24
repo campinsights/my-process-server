@@ -1,19 +1,10 @@
-#include "myos_headers.h"
-#include "msg_handlers.h"
+#include "ipc_headers.h"
+#include "fio_handlers.h"
+#include "ipc_messaging.h"
 #include <stdbool.h>
 #include <time.h>
 
 #define UNUSED -1
-
-struct client {
-    int PID;
-    time_t start_time;
-    char mailbox_name[STRING_SIZE];
-    char fifo_name[STRING_SIZE];
-    int fd_outgoing;
-    int join_PID;
-    int wait_PID;
-} clients[MAX_CLIENTS];
 
 /* -----~~~~~===== define necessary global variables =====~~~~~----- */
 int nextPID = 0;     // next available client process PID
@@ -23,9 +14,48 @@ int connections = 0; // how many connected client processes
 bool running = true; // whether the process server is supposed to
                      // still be running
 
+/* create a structure to store client process information, sort of a
+   process information block in miniature                            */
+struct Client {
+    int PID;
+    time_t start_time;
+    char mailbox_name[STRING_SIZE];
+    char fifo_name[STRING_SIZE];
+    int fd_outgoing;
+    int join_PID;
+    int wait_PID;
+} clients[MAX_CLIENTS];
+
+/* create a hash table of mailboxes */
+struct Mailbox *mboxes[STRING_SIZE];
+
+/* the following function computes the hash code for a mailbox       */
+int mbox_hash(char *mbox_name)
+{
+    // initialize sum to 0, then add each character value in turn
+    int sum = 0;
+    for(int i = 0; i < strlen(mbox_name); i++)
+        sum += (int)mbox_name[i];
+    // the hash code is the remainder when divided by the array/string size
+    return sum % STRING_SIZE;
+}
+
+/* the following function registers a new mailbox                    */
+void register_mbox(char *mbox_name)
+{
+    int hash = mbox_hash(mbox_name);
+    if(mboxes[hash]==NULL)
+        mboxes[hash] = new_mbox(mbox_name);
+    else
+    {
+        /* code */
+    }
+    
+}
+
 /* the following function reads information from the server FIFO     *
  * to set up a new client struct and connect to a new client process */
-void connectProcess(struct client *my_client)
+void connect_process(struct Client *my_client)
 {
     // CONNECT has two parameters -- int: linux PID, C-string: mailbox name
     int processLinuxPID;
@@ -35,6 +65,7 @@ void connectProcess(struct client *my_client)
     sprintf(my_client->fifo_name, CLIENT_FIFO, processLinuxPID);
     // read mailbox name:
     read_string(fd_syscall, my_client->mailbox_name, STRING_SIZE);
+    register_mbox(my_client->mailbox_name)
     // give client process a new PID:
     printf("myOS: connecting Host-OS process #%d\n", processLinuxPID);
     my_client->PID = nextPID;
@@ -70,7 +101,7 @@ void connect_fail()
 }
 
 /* the following function disconnects from a client process */
-void disconnectProcess(struct client *my_client)
+void disconnect_process(struct Client *my_client)
 {
     // first, find out if any process has JOINed my_client
     // and send any that have a no-error (0) signal:
@@ -136,7 +167,7 @@ int main()
         
         // if we get here, we have received a CONNECT request, so...
         // connect to our first process:
-        connectProcess(&(clients[nextPID]));
+        connect_process(&(clients[nextPID]));
 
         // go into loop to read and respond to client requests:
         while(connections > 0)
@@ -170,7 +201,7 @@ int main()
             {
                 // if there are any available slots, clients[nextPID].PID will equal the UNUSED flag
                 if(clients[nextPID].PID == UNUSED)
-                    connectProcess(&(clients[nextPID]));
+                    connect_process(&(clients[nextPID]));
                 else
                     // otherwise, handle the failure gracefully:
                     connect_fail();
@@ -197,10 +228,10 @@ int main()
                     }
                     else
                         // otherwise, we just disconnect the client process.
-                        disconnectProcess(&(clients[clientPID]));
+                        disconnect_process(&(clients[clientPID]));
                     break;
                 case SYSCALL_EXIT:
-                    disconnectProcess(&(clients[clientPID]));
+                    disconnect_process(&(clients[clientPID]));
                     break;
                 case SYSCALL_PING:
                     // syscall PING has one parameter: the integer code that we are to

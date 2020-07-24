@@ -1,3 +1,6 @@
+#ifndef IPC_H_INCLUDED
+#define IPC_H_INCLUDED
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -119,3 +122,5 @@
  * - int: number of parameters to set                                   *
  * - (n) C-strings with format "key:value"                              */
 #define SYSCALL_CONFIGURE 023
+
+#endif
