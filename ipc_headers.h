@@ -33,11 +33,11 @@
  * calls from other processes will not get mixed in with the IPC        *
  * messages being sent by the client who made the syscall we are        *
  * currently handling                                                   */ 
-#define SERVER_FIFO_1 "myOS_syscall_fifo"
-#define SERVER_FIFO_2 "myOS_comm_channel_fifo"
+#define SERVER_FIFO_1 "IPCD_syscall_fifo"
+#define SERVER_FIFO_2 "IPCD_comm_channel_fifo"
 /* Each client gets its own "return address" in the form of a FIFO that *
  * is initialized with the client process' host OS PID                  */
-#define CLIENT_FIFO "myProcess_%d_fifo"
+#define CLIENT_FIFO "IPCC_%d_fifo"
 /* the FIFO's all get the file permissions of the devil: 666            */
 /* seriously, this ensures that the server and all client processes can */
 /* read from and write to the necessary FIFO files                      */
@@ -47,12 +47,15 @@
 /* I have yet to run into a string in this program that needed to be    *
  * longer than 255 characters, and it seems like a nice round number    */
 #define STRING_SIZE 256
-/* For the purposes of this demonstration program, an array of 10       *
- * connected clients is large enough to show proof-of-concept. For a    *
- * full-scale deployment, we might choose a much larger number for      *
- * MAX_CLIENTS, or we might use a dynamically-allocated array that we   *
- * can copy into a larger array each time space gets tight.             */
-#define MAX_CLIENTS 10
+/* For the purposes of this demonstration program, a small array size   *
+ * for the connected client manager and the mailbox hash table is large *
+ * enough to show proof-of-concept. For a full-scale deployment that    *
+ * might need to handle hundreds of processes, we might choose a much   *
+ * larger number for LIST_SIZE, we might implement a hash table with    *
+ * linked lists like we do for mailboxes here, or we might use a        *
+ * dynamically-allocated array that we can copy into a larger array     *
+ * when space gets tight, a la the implementation of vector in C++      */
+#define LIST_SIZE 64
 
 /* -------------------- DEFINE SYSTEM CALLS HERE ---------------------- */
 

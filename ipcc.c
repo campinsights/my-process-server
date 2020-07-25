@@ -1,5 +1,6 @@
 #include "ipc_headers.h"
-#include "msg_handlers.h"
+#include "fio_handlers.h"
+#include "ipc_messaging.h"
 
 /* ---------- define key communication variables ---------- */
 int fd_incoming, fd_syscall, fd_commchannel; // file descriptors for communication FIFO's
@@ -43,9 +44,9 @@ int main()
     scanf("%s", mailbox_name);
     
     // open FIFO for reading incoming connections:
-    printf("CLIENT: opening syscall FIFO at %s\n", SERVER_FIFO_1);
+    printf("IPCC: opening syscall FIFO at %s\n", SERVER_FIFO_1);
     fd_syscall = open(SERVER_FIFO_1, O_WRONLY);
-    printf("CLIENT: opening comm-channel FIFO at %s\n", SERVER_FIFO_1);
+    printf("IPCC: opening comm-channel FIFO at %s\n", SERVER_FIFO_1);
     fd_commchannel = open(SERVER_FIFO_2, O_WRONLY);
 
     // get PID for sending to server:
@@ -58,19 +59,19 @@ int main()
 
     /* send CONNECT syscall                         *
      * parameters: int: PID, C-string: mailbox name */
-    printf("myProcess: logging into process server\n");
+    printf("IPCC: logging into process server\n");
     int syscall_code = SYSCALL_CONNECT;
     write(fd_syscall, &syscall_code, sizeof(int));
     write(fd_syscall, &my_linux_PID, sizeof(int));
-    write_string(fd_syscall, mailbox_name);
+    write_string(fd_commchannel, mailbox_name);
     
     // open FIFO for reading incoming connections:
-    printf("myProcess: creating and opening client FIFO at %s\n", client_fifo_name);
+    printf("IPCC: creating and opening client FIFO at %s\n", client_fifo_name);
     fd_incoming = open(client_fifo_name, O_RDONLY);
 
     // read and report server connection:
     read_int(fd_incoming, &my_client_PID);
-    printf("myProcess: process server confirmed connection and gave me PID #%d.\n", my_client_PID);
+    printf("IPCC: process server confirmed connection and gave me PID #%d.\n", my_client_PID);
 
     // now that server is connected, go into input-action loop:
     while (syscall_code != SYSCALL_EXIT && syscall_code != SYSCALL_SHUTDOWN)
