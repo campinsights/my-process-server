@@ -59,11 +59,10 @@ void send_message()
     bool bad_data = true;
     while(bad_data)
     {
-        //clear residual newline character
-        char throwaway[2];
-        fgets(throwaway, STRING_SIZE, stdin);
-    
         printf("Message priority [(B)ATCH, (N)ORMAL, (I)NTERRUPT]? ");
+        //clear residual newline character:
+        scanf("%c", &input);
+        //now get actual data:
         scanf("%c", &input);
         bad_data = false;
         switch (input)
@@ -90,11 +89,10 @@ void send_message()
     bad_data = true;
     while(bad_data)
     {
-        //clear residual newline character
-        char throwaway[2];
-        fgets(throwaway, STRING_SIZE, stdin);
-    
         printf("Message type? [(I)NFO, RE(Q)UEST, (S)TATUS, (R)ESULT] ");
+        //clear residual newline character:
+        scanf("%c", &input);
+        //now get actual data:
         scanf("%c", &input);
         bad_data = false;
         switch (input)
@@ -146,6 +144,79 @@ void send_message()
     lines--;
     printf("Sent %d message lines to server\n", lines);
     read_string_and_echo();            
+}
+
+void check_messages()
+{
+    /* send syscall CONFIGURE                       *
+     * parameters:                                  *
+     * int: priority level                          *
+     * int: message type                            */
+    char input;
+    int priority, type;
+    printf("Message priority [(S)PAM, (B)ATCH, (N)ORMAL, (I)NTERRUPT, (A)LL]? ");
+    //clear residual newline character:
+    scanf("%c", &input);
+    //now get actual data:
+    scanf("%c", &input);
+    switch (input)
+    {
+    case 's':
+    case 'S':
+        priority = PRIORITY_SPAM;
+        break;
+    case 'b':
+    case 'B':
+        priority = PRIORITY_BATCH;
+        break;
+    case 'n':
+    case 'N':
+        priority = PRIORITY_NORMAL;
+        break;
+    case 'i':
+    case 'I':
+        priority = PRIORITY_INTERRUPT;
+        break;
+    default:
+        priority = PRIORITY_ALL;
+        break;
+    }
+    //send requested priority to server:
+    write_int(fd_commchannel, &priority);
+    
+    printf("Message type? [(I)NFO, RE(Q)UEST, (S)TATUS, (R)ESULT, (A)LL] ");
+    //clear residual newline character:
+    scanf("%c", &input);
+    //now get actual data:
+    scanf("%c", &input);
+    switch (input)
+    {
+    case 'i':
+    case 'I':
+        type = TYPE_INFO;
+        break;        
+    case 'q':
+    case 'Q':
+        type = TYPE_REQUEST;
+        break;
+    case 's':
+    case 'S':
+        type = TYPE_STATUS;
+        break;
+    case 'r':
+    case 'R':
+        type = TYPE_RESULT;
+        break;
+    default:
+        type = TYPE_ALL;
+        break;
+    }
+    //send requested message type to server:
+    write_int(fd_commchannel, &type);
+
+    printf("<- Sent CHECK request to server\n");
+    // read and echo server response:
+    read_string_and_echo();
 }
 
 int main()
@@ -244,9 +315,10 @@ int main()
                 // ask user to specify number of settings:
                 printf("How many settings do you want to configure? ");
                 scanf("%d", &send_int);
-                /* send syscall CONFIGURE                 *
-                 * parameters: int: # of settings,        *
-                 * list of C-strings: settings themselves */ 
+                /* send syscall CONFIGURE                       *
+                 * parameters:                                  *
+                 * int: # of settings,                          *
+                 * list of C-string pairs: settings themselves  */ 
                 printf("<- Sending CONFIGURE %d request to server\n", send_int);
                 write_int(fd_commchannel, &send_int);
                 // read and echo server response:
@@ -273,11 +345,7 @@ int main()
                 send_message();
                 break;
             case SYSCALL_CHECK:
-                /* send syscall CHECK                      *
-                 * no parameters                           */
-                printf("<- Sent CHECK request to server\n");
-                // read and echo server response:
-                read_string_and_echo();
+                check_messages();
                 break;
             case SYSCALL_FETCH:
                 /* send syscall FETCH                      *

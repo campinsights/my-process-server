@@ -84,7 +84,7 @@ void connect_process(struct Client *my_client)
     // read mailbox name:
     read_string(fd_commchannel, my_client->mailbox_name, STRING_SIZE);
     struct Mailbox * mbox = register_mbox(my_client->mailbox_name);
-    int waiting = num_waiting_msgs(mbox);
+    int waiting = num_waiting_msgs(mbox, PRIORITY_ALL, TYPE_ALL);
     printf("IPCD: mailbox %s registered successfully; it has %d waiting messages\n", my_client->mailbox_name, waiting);
     // give client process a new PID:
     my_client->PID = nextPID;
@@ -164,7 +164,11 @@ void receive_message(int clientPID)
     read_int(fd_commchannel, &type);
     printf("IPCD: receiving priority %d, type %d message from cliend %d for mailbox %s\n", priority, type, clientPID, mbox_name);
 
-    // find the mailbox, create a new message here
+    // find the mailbox, creating it if it does not yet exist:
+    struct Mailbox * mbox = register_mbox(mbox_name);
+    
+    // add a message to the list:
+    struct Message * msg = add_message(mbox, priority, type);
 
     char response_string[STRING_SIZE*2];
     sprintf(response_string, "Ready to receive priority %d, type %d message for mailbox %s", priority, type, mbox_name);
@@ -175,8 +179,8 @@ void receive_message(int clientPID)
     do {
         read_string(fd_commchannel, message_line, STRING_SIZE);
         printf("IPCD: received line %d = '%s'\n", ++lines, message_line);
-        
-        // add message_line to message here
+        if(strlen(message_line) > 0)
+            add_line(msg, message_line);
     } while(strlen(message_line) > 0);
     // we actually over-count lines by one because of the
     // last empty line, so...
@@ -247,7 +251,7 @@ int main()
         {
             // set up some communication variables:
             int clientPID; // which client process we are currently communicating with
-            int param_int; // several syscalls send an integer parameter
+            int param_int, param_int_2; // several syscalls send integer parameters
             char param_string[STRING_SIZE]; // several syscalls send a string parameter
             char mailbox_name[STRING_SIZE]; // the SEND syscall also identifies a target mailbox
             char response_string[STRING_SIZE*2]; // this is the response we echo back to the client process
@@ -334,11 +338,16 @@ int main()
                     break;
                 case SYSCALL_CHECK:
                     printf("IPCD: received CHECK request for mailbox %s\n", clients[clientPID].mailbox_name);
-                    // syscall CHECK is supposed to return the number of messages in the queue;
-                    // for now, we will just return a random single-digit number:
-                    param_int = (rand() % 10);
-                    printf("IPCD: pretending we have %d messages for mailbox %s\n", param_int, clients[clientPID].mailbox_name);
-                    sprintf(response_string, "You have %d messages waiting", param_int);
+                    // syscall CHECK is supposed to return the number of messages in the queue
+                    // with a specified priority and type:
+                    read_int(fd_commchannel, &param_int); // priority
+                    read_int(fd_commchannel, &param_int_2); // type
+                    printf("IPCD: checking for messages of priority %d and type %d\n", param_int, param_int_2);
+                    // first, get the mailbox (creating one if it does not exist)
+                    struct Mailbox * mbox = register_mbox(clients[clientPID].mailbox_name);
+                    response_int = num_waiting_msgs(mbox, param_int, param_int_2);
+                    printf("IPCD: found %d messages of the correct priority and type\n", response_int);
+                    sprintf(response_string, "You have %d messages of priority %d and type %d", response_int, param_int, param_int_2);
                     write_string(clients[clientPID].fd_outgoing, response_string);
                 break;
                 case SYSCALL_FETCH:

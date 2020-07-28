@@ -14,7 +14,8 @@ struct Mailbox * new_mbox(char * mbox_name, struct Mailbox * prev)
     mbox->msg_queue = NULL;
     // make sure the prev pointer works:
     mbox->prev = prev;
-    // make the rest of the list null:
+    // we always add to the end of the list, so
+    // next should be NULL:
     mbox->next = NULL;
     // return the new mailbox:
     return mbox;
@@ -99,7 +100,7 @@ struct Mailbox * get_mbox_at(struct Mailbox * head, int list_posn)
 
 /* this function determines how many total messages are waiting in  *
  * a mailbox's message queue                                        */
-int num_waiting_msgs(struct Mailbox * mbox)
+int num_waiting_msgs(struct Mailbox * mbox, int priority, int type)
 {
     // start at head of queue with zero messages:
     struct Message * current = mbox->msg_queue;
@@ -108,10 +109,109 @@ int num_waiting_msgs(struct Mailbox * mbox)
     // noting one more waiting message each time:
     while(current != NULL)
     {
+        if((priority == PRIORITY_ALL || current->priority == priority) && (type == TYPE_ALL || current->type == type))
+            count++;
         current = current->next;
-        count++;
     }
     // 'count' should now be the correct number of messages, or
     // zero if the message queue is NULL:
     return count;
 }
+
+/* this function creates a new message with the specified priority  *
+ * and type, adding it as a node after the node specified by 'prev' */
+struct Message * new_message(int priority, int type, struct Message * prev)
+{
+    // make space for a new message:
+    struct Message * msg = malloc(sizeof(struct Message));
+    // set the priority and type:
+    msg->priority = priority;
+    msg->type = type;
+    // this is a new message so its list of lines of text
+    // should be empty:
+    msg->firstLine = NULL;
+    // make sure the prev pointer works:
+    msg->prev = prev;
+    // we always add to the end of the list, so
+    // next should be NULL:
+    msg->next = NULL;
+    // return the new message:
+    return msg;
+}
+
+/* this function adds a new message with the specified priority and *
+ * type to the message queue whose head is specified by 'head'; it  *
+ * returns the new message                                          */
+struct Message * add_message(struct Mailbox * mbox, int priority, int type)
+{
+    int length;
+    struct Message * tail = mbox->msg_queue;
+    if (tail == NULL)
+    {
+        // if we reach this point we are starting a new list, so...
+        tail = mbox->msg_queue = new_message(priority, type, NULL);
+        length = 1;
+    }
+    else
+    {
+        // initialize length to 1 (the head)
+        length = 1;
+        // start at the head of the list and find the tail:
+        while(tail->next != NULL)
+        {
+            tail = tail->next;
+            length++;
+        }
+        // now we are at the end of the list, so add the new message:
+        tail->next = new_message(priority, type, tail);
+        tail = tail->next;
+        length++;
+    }
+    return tail;
+}
+
+/* this function creates and returns a new line of message text     */
+struct Line * new_line(char text[STRING_SIZE])
+{
+    // make space for a new line of text:
+    struct Line * line = malloc(sizeof(struct Line));
+    // copy over the message text:
+    strcpy(line->text, text);
+    // we always add to the end of the list, so
+    // next should be NULL:
+    line->next = NULL;
+    // return the new message:
+    return line;
+}
+
+/* this function adds a line of text to an existing message; it     *
+ * returns the number of lines in the message                       */
+int add_line(struct Message * msg, char line[STRING_SIZE])
+{
+    int num_lines;
+    if(msg->firstLine == NULL)
+    {
+        msg->firstLine = new_line(line);
+        num_lines = 1;
+    }
+    else
+    {
+        // initialize list length to one (the head of the list)
+        num_lines = 1;
+        struct Line * head = msg->firstLine;
+        // start at the head of the list and find the tail:
+        struct Line * tail = head;
+        while(tail->next != NULL)
+        {
+            tail = tail->next;
+            num_lines++;
+        }
+        // now we are at the end of the list, so add the new message:
+        tail->next = new_line(line);
+        num_lines++;
+    }
+    msg->lines = num_lines;
+    return num_lines;
+}
+
+

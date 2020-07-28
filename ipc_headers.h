@@ -109,18 +109,24 @@
 
 /* SEND sends a message to a mailbox; it takes these parameters:        *
  * - C-string: destination mailbox name                                 *
- * - int: priority
- * - int: message type
- * - int: number of strings to follow                                   *
- * - (n) C-strings: the message, as enumerated by previous byte         */
+ * - int: priority                                                      *
+ * - int: message type                                                  *
+ * - (n) C-strings: the message                                         *
+ * - one empty C-string as a message terminator                         */
 #define SYSCALL_SEND 020
 
-/* CHECK queries the server to find out how many C-strings are          *
- * waiting in its mailbox; no param's                                   */
+/* CHECK queries the server to find out how many C-strings of a given   *
+ * priority level and message type are waiting in its mailbox; it takes *
+ * these parameters:                                                    *
+ * - int: priority to check for                                         *
+ * - int: message type to check for                                     */
 #define SYSCALL_CHECK 021
 
-/* FETCH gets the first C-string waiting in the named mailbox;          *
- * no param's                                                           */
+/* FETCH gets the first message of the given priority and type waiting  *
+ * in the named mailbox and removes it from the message queue; it takes *
+ * these parameters:                                                    *
+ * - int: priority                                                      *
+ * - int: message type                                                  */
 #define SYSCALL_FETCH 022
 
 /* CONFIGURE sets mailbox parameters -- the user sets as many           *
