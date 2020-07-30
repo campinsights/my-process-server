@@ -1,12 +1,13 @@
 #include "ipc_headers.h"
 #include "fio_handlers.h"
 #include "ipc_messaging.h"
-#include <stdbool.h>
 #include <time.h>
 
+/* mark unused Client records as unused by setting their PID's and FD's *
+ * to an illegal number (-1)                                            */
 #define UNUSED -1
 
-/* -----~~~~~===== define necessary global variables =====~~~~~----- */
+/*   -----~~~~~===== define necessary global variables =====~~~~~-----  */
 int nextPID = 0;     // next available client process PID
 int fd_syscall, fd_commchannel; // file pointers for incoming server FIFOs
 int syscall_code;    // most recent incoming system call code
@@ -15,7 +16,7 @@ bool running = true; // whether the process server is supposed to
                      // still be running
 
 /* create a structure to store client process information, sort of a
-   process information block in miniature                            */
+   process control block in miniature                                   */
 struct Client {
     int PID;
     time_t start_time;
@@ -29,7 +30,7 @@ struct Client {
 /* create a hash table of mailboxes */
 struct Mailbox *mboxes[LIST_SIZE];
 
-/* the following function computes the hash code for a mailbox       */
+/* the following function computes the hash code for a mailbox          */
 int mbox_hash(char *mbox_name)
 {
     // initialize sum to 0, then add each character value in turn
@@ -118,7 +119,7 @@ void connect_fail()
     // TODO: add code to connect client FIFO long enough to send an error code
 }
 
-/* the following function disconnects from a client process */
+/* the following function disconnects from a client process     */
 void disconnect_process(struct Client *my_client)
 {
     // first, find out if any process has JOINed my_client
@@ -142,6 +143,50 @@ void disconnect_process(struct Client *my_client)
     printf("IPCD: connected to %d clients\n", connections);
 }
 
+/* the following function receives a client message             */
+void receive_message(int clientPID)
+{
+    /* syscall SEND                             *
+     * parameters: C-string: mailbox,           *
+     * int: priority                            *
+     * int: message type                        *
+     * int: number of C-strings to send         *
+     * list of C-strings: messages themselves   */ 
+    
+    // read the mailbox name:
+    char mbox_name[STRING_SIZE];
+    read_string(fd_commchannel, mbox_name, STRING_SIZE);
+
+    // read the message priority and type:
+    int priority;
+    read_int(fd_commchannel, &priority);
+    int type;
+    read_int(fd_commchannel, &type);
+    printf("IPCD: receiving priority %d, type %d message from cliend %d for mailbox %s\n", priority, type, clientPID, mbox_name);
+
+    // find the mailbox, create a new message here
+
+    char response_string[STRING_SIZE*2];
+    sprintf(response_string, "Ready to receive priority %d, type %d message for mailbox %s", priority, type, mbox_name);
+    write_string(clients[clientPID].fd_outgoing, response_string);
+    
+    char message_line[STRING_SIZE];
+    int lines = 0;
+    do {
+        read_string(fd_commchannel, message_line, STRING_SIZE);
+        printf("IPCD: received line %d = '%s'\n", ++lines, message_line);
+        
+        // add message_line to message here
+    } while(strlen(message_line) > 0);
+    // we actually over-count lines by one because of the
+    // last empty line, so...
+    lines--;
+    // client expects a confirmation, so...
+    sprintf(response_string, "Received %d message lines", lines);
+    write_string(clients[clientPID].fd_outgoing, response_string);
+    printf("IPCD: finished receiving %d lines of text\n", lines);
+}
+
 int main()
 {
     // just in case we need it, get my host OS PID:
@@ -150,13 +195,14 @@ int main()
     // use it to seed my random number generator:
     srand(my_linux_PID);
 
-    // initialize all client PID's to the unused flag:
+    // initialize all client PID's and mailboxes:
     for(int i = 0; i < LIST_SIZE; i++)
     {
         clients[i].PID = UNUSED;
         clients[i].join_PID = UNUSED;
         clients[i].wait_PID = UNUSED;
         clients[i].fd_outgoing = UNUSED;
+        mboxes[i] = NULL;
     }
 
     while(running)
@@ -284,20 +330,7 @@ int main()
                     }
                     break;
                 case SYSCALL_SEND:
-                    // syscall SEND has a C-string mailbox name as first parameter:
-                    read_string(fd_commchannel, mailbox_name, STRING_SIZE);
-                    // the next byte specifies the number of C-string messages to read:
-                    read_int(fd_commchannel, &param_int);
-                    printf("IPCD: received request from process %d to send %d messages to mailbox %s\n", clientPID, param_int, mailbox_name);
-                    sprintf(response_string, "Received request to SEND %d messages to mailbox %s.\n", param_int, mailbox_name);
-                    write_string(clients[clientPID].fd_outgoing, response_string);
-                    for(int i = 0; i < param_int; i++)
-                    {
-                        read_string(fd_commchannel, param_string, STRING_SIZE);
-                        printf("IPCD: message %d = \"%s\".\n", i+1, param_string);
-                        sprintf(response_string, "Received message \"%s\"", param_string);
-                        write_string(clients[clientPID].fd_outgoing, response_string);
-                    }
+                    receive_message(clientPID);
                     break;
                 case SYSCALL_CHECK:
                     printf("IPCD: received CHECK request for mailbox %s\n", clients[clientPID].mailbox_name);

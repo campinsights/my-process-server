@@ -8,7 +8,8 @@ int my_linux_PID, my_client_PID; // host OS and process server PID's
 char client_fifo_name[STRING_SIZE]; // filename for our client FIFO
 char response_string[STRING_SIZE * 2]; // server response string
 int response_int; // server response integer
-    
+
+/* this function sends a system call to the process server  */    
 void send(int syscall_code)
 {
     // send system call and PID to process server:
@@ -19,6 +20,8 @@ void send(int syscall_code)
     read_int(fd_incoming, &response_int);
 }
 
+/* this function reads a response string from the IPC       *
+ * server and echoes the response to the console            */
 void read_string_and_echo()
 {
     // read and echo server response:
@@ -26,11 +29,123 @@ void read_string_and_echo()
     printf("-> Server sent response: %s\n", response_string);
 }
 
+/* this function reads an integer response code from the    *
+ * IPC server and echoes the response to the console        */
 void read_int_and_echo()
 {
     // read and echo server response:
     read_int(fd_incoming, &response_int);
     printf("-> Server sent response: %d\n", response_int);
+}
+
+/* this function reads input from the user and sends it as  *
+ * a message to the IPC server                              */
+void send_message()
+{
+    /* syscall SEND                             *
+     * parameters: C-string: mailbox,           *
+     * int: priority                            *
+     * int: message type                        *
+     * int: number of C-strings to send         *
+     * list of C-strings: messages themselves   */ 
+
+    char mbox_name[STRING_SIZE];
+    char input;
+    int priority, type, lines;
+    // ask user to specify destination mailbox:
+    printf("Enter name of mailbox to send to: ");
+    scanf("%s", mbox_name);
+    // enter a data validation loop for message priority:
+    bool bad_data = true;
+    while(bad_data)
+    {
+        //clear residual newline character
+        char throwaway[2];
+        fgets(throwaway, STRING_SIZE, stdin);
+    
+        printf("Message priority [(B)ATCH, (N)ORMAL, (I)NTERRUPT]? ");
+        scanf("%c", &input);
+        bad_data = false;
+        switch (input)
+        {
+        case 'b':
+        case 'B':
+            priority = PRIORITY_BATCH;
+            break;
+        case 'n':
+        case 'N':
+            priority = PRIORITY_NORMAL;
+            break;
+        case 'i':
+        case 'I':
+            priority = PRIORITY_INTERRUPT;
+            break;
+        default:
+            printf("'%c' was not one of the available choices, please try again.\n", input);
+            bad_data = true;
+            break;
+        }
+    }
+    // enter a data validation loop for message type:
+    bad_data = true;
+    while(bad_data)
+    {
+        //clear residual newline character
+        char throwaway[2];
+        fgets(throwaway, STRING_SIZE, stdin);
+    
+        printf("Message type? [(I)NFO, RE(Q)UEST, (S)TATUS, (R)ESULT] ");
+        scanf("%c", &input);
+        bad_data = false;
+        switch (input)
+        {
+        case 'i':
+        case 'I':
+            type = TYPE_INFO;
+            break;
+        case 'q':
+        case 'Q':
+            type = TYPE_REQUEST;
+            break;
+        case 's':
+        case 'S':
+            type = TYPE_STATUS;
+            break;
+        case 'r':
+        case 'R':
+            type = TYPE_RESULT;
+            break;
+        default:
+            printf("That was not one of the available choices, please try again.\n");
+            bad_data = true;
+            break;
+        }
+    }
+    // send what we have of the sys call params so far:
+    printf("<- message to: %s, priority: %d, type %d\n", mbox_name, priority, type);
+    write_string(fd_commchannel, mbox_name);
+    write_int(fd_commchannel, &priority);
+    write_int(fd_commchannel, &type);
+    // read and echo server response:
+    read_string_and_echo();
+    
+    printf("Now enter your message, one line at a time, blank line to end:\n");
+    lines = 0;
+    char send_string[STRING_SIZE];
+    // clear the trailing newline character from the input buffer:
+    fgets(send_string, STRING_SIZE, stdin);
+    do {
+        printf("LINE %d: ", ++lines);
+        fgets(send_string, STRING_SIZE, stdin);
+        // strip trailing newline character:
+        send_string[strlen(send_string)-1] = '\0';
+        write_string(fd_commchannel, send_string);
+    } while(strlen(send_string) > 0);
+    // we actually over-count lines by one because of the
+    // last empty line, so...
+    lines--;
+    printf("Sent %d message lines to server\n", lines);
+    read_string_and_echo();            
 }
 
 int main()
@@ -95,6 +210,8 @@ int main()
         char key[STRING_SIZE/2], value[STRING_SIZE/2]; // key-value pairs for CONFIGURE syscall
         char send_string[STRING_SIZE]; // several syscalls require sending a string
         int send_int; // several syscalls send an integer parameter
+        char send_char;
+        bool bad_data = false;
         int response_int; // response code from server
 
         // now respond to the user's choice more specifically:
@@ -153,35 +270,7 @@ int main()
                 printf("Sent %d settings to server\n", send_int);
                 break; 
             case SYSCALL_SEND:
-                // ask user to specify destination mailbox and number of lines to send:
-                printf("Enter name of mailbox to send to: ");
-                scanf("%s", send_string);
-                printf("Send how many lines (one message per line)? ");
-                scanf("%d", &send_int);
-                /* send syscall SEND                      *
-                 * parameters: C-string: mailbox,         *
-                 * byte: number of C-strings to send      *
-                 * list of C-strings: messages themselves */ 
-                printf("Sending SEND %s:%d request to server\n", send_string, send_int);
-                write_string(fd_commchannel, send_string);
-                write_int(fd_commchannel, &send_int);
-                // read and echo server response:
-                read_string_and_echo();
-                // clear the trailing newline character from the input buffer:
-                fgets(send_string, STRING_SIZE, stdin);
-                for(int i = 1; i <= send_int; i++)
-                {
-                    // prompt for the message string:
-                    printf("msg #%d: ", i);
-                    fgets(send_string, STRING_SIZE, stdin);
-                    // strip trailing newline character:
-                    send_string[strlen(send_string)-1] = '\0';
-                    printf("<- sending message #%d\n", i);
-                    write_string(fd_commchannel, send_string);
-                    // read and echo server response:
-                    read_string_and_echo();
-                }
-                printf("Sent %d messages to server\n", send_int);
+                send_message();
                 break;
             case SYSCALL_CHECK:
                 /* send syscall CHECK                      *

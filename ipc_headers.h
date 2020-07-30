@@ -5,8 +5,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <stdlib.h>
+#include <stdbool.h>
 #include <stdio.h> 
+#include <stdlib.h>
 #include <string.h> 
 
 /* -------------------------------------------------------------------- *
@@ -44,9 +45,9 @@
 #define FIFO_MODE 0666
 
 /* -------------------- DEFINE SOME STANDARD SIZES -------------------- */
-/* I have yet to run into a string in this program that needed to be    *
- * longer than 255 characters, and it seems like a nice round number    */
-#define STRING_SIZE 256
+/* I seem to remember that the widest terminal screens display 120      *
+ * characters, so that seems like a good limit for one line of a message*/
+#define STRING_SIZE 121
 /* For the purposes of this demonstration program, a small array size   *
  * for the connected client manager and the mailbox hash table is large *
  * enough to show proof-of-concept. For a full-scale deployment that    *
@@ -108,6 +109,8 @@
 
 /* SEND sends a message to a mailbox; it takes these parameters:        *
  * - C-string: destination mailbox name                                 *
+ * - int: priority
+ * - int: message type
  * - int: number of strings to follow                                   *
  * - (n) C-strings: the message, as enumerated by previous byte         */
 #define SYSCALL_SEND 020
