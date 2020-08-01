@@ -1,6 +1,63 @@
+#include "yams_headers.h"
 #include "ipc_messaging.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
+
+/* function to interpret priority code as a string                  */
+void pri_str(char * priority_string, int priority_code)
+{
+    switch (priority_code)
+    {
+    case PRIORITY_SPAM:
+        sprintf(priority_string, "SPAM");
+        break;
+    case PRIORITY_BATCH:
+        sprintf(priority_string, "BATCH");
+        break;
+    case PRIORITY_NORMAL:
+        sprintf(priority_string, "NORMAL");
+        break;
+    case PRIORITY_INTERRUPT:
+        sprintf(priority_string, "INTERRUPT");
+        break;
+    case PRIORITY_ALL:
+        sprintf(priority_string, "ANY/ALL");
+        break;
+    default:
+        sprintf(priority_string, "UNKNOWN");
+        break;
+    }
+}
+
+/* function to interpret type code as a string                      */
+void typ_str(char * type_string, int type_code)
+{
+    switch (type_code)
+    {
+    case TYPE_INFO:
+        sprintf(type_string, "INFO");
+        break;
+    case TYPE_REQUEST:
+        sprintf(type_string, "REQUEST");
+        break;
+    case TYPE_STATUS:
+        sprintf(type_string, "STATUS");
+        break;
+    case TYPE_RESULT:
+        sprintf(type_string, "RESULT");
+        break;
+    case TYPE_SYSTEM:
+        sprintf(type_string, "SYSTEM");
+        break;
+    case TYPE_ALL:
+        sprintf(type_string, "ANY/ALL");
+        break;
+    default:
+        sprintf(type_string, "UNKNOWN");
+        break;
+    }
+}
 
 /* this function creates a new mailbox, adding it as a node after   *
  * the node specified by 'prev'                                     */
@@ -11,7 +68,7 @@ struct Mailbox * new_mbox(char * mbox_name, struct Mailbox * prev)
     // copy in the mailbox name:
     strcpy(mbox->mbox_name, mbox_name);
     // this is a new mailbox so its message queue should be empty:
-    mbox->msg_queue = NULL;
+    mbox->first_msg = NULL;
     // make sure the prev pointer works:
     mbox->prev = prev;
     // we always add to the end of the list, so
@@ -98,18 +155,22 @@ struct Mailbox * get_mbox_at(struct Mailbox * head, int list_posn)
     return current;
 }
 
-/* this function determines how many total messages are waiting in  *
- * a mailbox's message queue                                        */
-int num_waiting_msgs(struct Mailbox * mbox, int priority, int type)
+/* this function determines how many messages of the given priority *
+ * and type are waiting in a mailbox's message queue                */
+int num_waiting_msgs(struct Mailbox * mbox, int priority, int type, char *sender)
 {
     // start at head of queue with zero messages:
-    struct Message * current = mbox->msg_queue;
+    struct Message * current = mbox->first_msg;
     int count = 0;
     // traverse the list one node at a time until we reach the end,
     // noting one more waiting message each time:
     while(current != NULL)
     {
-        if((priority == PRIORITY_ALL || current->priority == priority) && (type == TYPE_ALL || current->type == type))
+        // P = priority match, T = type match, S = sender match
+        bool P = (priority == PRIORITY_ALL || current->priority == priority);
+        bool T = (type == TYPE_ALL || current->type == type);
+        bool S = (strcmp(sender, "*") == 0 || strcmp(sender, current->sender_mbox) == 0);
+        if( P && T && S )
             count++;
         current = current->next;
     }
@@ -118,18 +179,85 @@ int num_waiting_msgs(struct Mailbox * mbox, int priority, int type)
     return count;
 }
 
+/* this function retrieves the first waiting message of a given     *
+ * priority and type then removes that message from the list        */
+struct Message * fetch_first_message(struct Mailbox * mbox, int priority, int type, char *sender)
+{
+    // start with the first message in the list
+    struct Message *current = mbox->first_msg;
+    if (current == NULL)
+    {
+        // if we get here, the mailbox is empty, 
+        // so just return the NULL value
+        return current;
+    }
+    // P = priority match, T = type match, S = sender match
+    bool P = (priority == PRIORITY_ALL || current->priority == priority);
+    bool T = (type == TYPE_ALL || current->type == type);
+    bool S = (strcmp(sender, "*") == 0 || strcmp(sender, current->sender_mbox) == 0);
+    // while we are not at a NULL record, 
+    // and one of the P, T, or S criteria are not met,
+    // progress to the next record
+    while(current != NULL && ( !P || !T || !S ))
+    {
+        current = current->next;
+        if (current == NULL)
+        {
+            // if we get here, no qualifying message was found, 
+            // so just return the NULL value
+            return current;
+        }
+        P = (priority == PRIORITY_ALL || current->priority == priority);
+        T = (type == TYPE_ALL || current->type == type);
+        S = (strcmp(sender, "*") == 0 || strcmp(sender, current->sender_mbox) == 0);
+    }
+    if(current != NULL)
+    {
+        // if we get here, we found a qualifying message, 
+        // so take it out of the list and return it
+        struct Message *prev = current->prev;
+        struct Message *next = current->next;
+        
+        if (prev == NULL)
+        {
+            // if we get here, 'current' is at the start of the list,
+            // so we re-set the first message to 'next':
+            mbox->first_msg = next;
+            return current;
+        }
+        else if (next==NULL)
+        {
+            // if we get here, 'current' is at the end of the list, 
+            // so we set 'prev' to be the new list ender:
+            prev->next = NULL;
+            return current;
+        }
+        else
+        {
+            // if we get here, 'current' is in the middle of the list,
+            // so we stitch together 'prev' and 'next' to edit 'current'
+            // out of the list:
+            prev->next = next;
+            next->prev = prev;
+            return current;
+        }
+    }
+}
+
 /* this function creates a new message with the specified priority  *
  * and type, adding it as a node after the node specified by 'prev' */
-struct Message * new_message(int priority, int type, struct Message * prev)
+struct Message * new_message(int priority, int type, char *sender, struct Message * prev)
 {
     // make space for a new message:
     struct Message * msg = malloc(sizeof(struct Message));
     // set the priority and type:
     msg->priority = priority;
     msg->type = type;
+    // copy over the sender identity:
+    strcpy(msg->sender_mbox, sender);
     // this is a new message so its list of lines of text
     // should be empty:
-    msg->firstLine = NULL;
+    msg->first_line = NULL;
     // make sure the prev pointer works:
     msg->prev = prev;
     // we always add to the end of the list, so
@@ -142,14 +270,14 @@ struct Message * new_message(int priority, int type, struct Message * prev)
 /* this function adds a new message with the specified priority and *
  * type to the message queue whose head is specified by 'head'; it  *
  * returns the new message                                          */
-struct Message * add_message(struct Mailbox * mbox, int priority, int type)
+struct Message * add_message(struct Mailbox * mbox, int priority, int type, char *sender)
 {
     int length;
-    struct Message * tail = mbox->msg_queue;
+    struct Message * tail = mbox->first_msg;
     if (tail == NULL)
     {
         // if we reach this point we are starting a new list, so...
-        tail = mbox->msg_queue = new_message(priority, type, NULL);
+        tail = mbox->first_msg = new_message(priority, type, sender, NULL);
         length = 1;
     }
     else
@@ -163,7 +291,7 @@ struct Message * add_message(struct Mailbox * mbox, int priority, int type)
             length++;
         }
         // now we are at the end of the list, so add the new message:
-        tail->next = new_message(priority, type, tail);
+        tail->next = new_message(priority, type, sender, tail);
         tail = tail->next;
         length++;
     }
@@ -189,18 +317,17 @@ struct Line * new_line(char text[STRING_SIZE])
 int add_line(struct Message * msg, char line[STRING_SIZE])
 {
     int num_lines;
-    if(msg->firstLine == NULL)
+    if(msg->first_line == NULL)
     {
-        msg->firstLine = new_line(line);
+        msg->first_line = new_line(line);
         num_lines = 1;
     }
     else
     {
         // initialize list length to one (the head of the list)
         num_lines = 1;
-        struct Line * head = msg->firstLine;
         // start at the head of the list and find the tail:
-        struct Line * tail = head;
+        struct Line * tail = msg->first_line;
         while(tail->next != NULL)
         {
             tail = tail->next;
@@ -210,7 +337,7 @@ int add_line(struct Message * msg, char line[STRING_SIZE])
         tail->next = new_line(line);
         num_lines++;
     }
-    msg->lines = num_lines;
+    msg->num_lines = num_lines;
     return num_lines;
 }
 

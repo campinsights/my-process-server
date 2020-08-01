@@ -11,8 +11,8 @@
 #include <string.h> 
 
 /* -------------------------------------------------------------------- *
- * -------- myOS and myProcess: a simple process communication -------- *
- * --------           and synchronization system               -------- *
+ * ----------       YAMS: Yet Another Messaging System        --------- *
+ * ---------- a simple IPC and process synchronization system --------- *
  * -------------------------------------------------------------------- *
  * This project defines a simple but versatile process commmunication   *
  * and synchronization system; the process server can accept and        *
@@ -34,20 +34,17 @@
  * calls from other processes will not get mixed in with the IPC        *
  * messages being sent by the client who made the syscall we are        *
  * currently handling                                                   */ 
-#define SERVER_FIFO_1 "IPCD_syscall_fifo"
-#define SERVER_FIFO_2 "IPCD_comm_channel_fifo"
+#define SERVER_FIFO_1 "YAMSD_syscall_fifo"
+#define SERVER_FIFO_2 "YAMSD_comm_channel_fifo"
 /* Each client gets its own "return address" in the form of a FIFO that *
  * is initialized with the client process' host OS PID                  */
-#define CLIENT_FIFO "IPCC_%d_fifo"
+#define CLIENT_FIFO "YAMS_%d_fifo"
 /* the FIFO's all get the file permissions of the devil: 666            */
 /* seriously, this ensures that the server and all client processes can */
 /* read from and write to the necessary FIFO files                      */
 #define FIFO_MODE 0666
 
 /* -------------------- DEFINE SOME STANDARD SIZES -------------------- */
-/* I seem to remember that the widest terminal screens display 120      *
- * characters, so that seems like a good limit for one line of a message*/
-#define STRING_SIZE 121
 /* For the purposes of this demonstration program, a small array size   *
  * for the connected client manager and the mailbox hash table is large *
  * enough to show proof-of-concept. For a full-scale deployment that    *
@@ -59,6 +56,9 @@
 #define LIST_SIZE 64
 
 /* -------------------- DEFINE SYSTEM CALLS HERE ---------------------- */
+
+/* unless otherwise noted, IPC server responds to all sys calls with a  *
+ * single C-string status message                                       */
 
 /* - octal codes starting with 0 are for connection and disconnection - */
 
@@ -82,11 +82,17 @@
 
 /* ------- octal codes starting with 1 are for interprocess API ------- */
 
-/* GETPID simply requests the client process's PID; no parameters       */
+/* GETPID simply requests the client process's PID;                     *
+ * (no parameters)                                                      *
+ * response:                                                            *
+ * - int: PID                                                           */
 #define SYSCALL_GETPID 010
 
 /* GETAGE requests the number of seconds the client has been "running"  *
- * (i.e., connected to the process server); no parameters               */
+ * (i.e., connected to the process server);                             *
+ * (no parameters)                                                      *
+ * response:                                                            *
+ * - int: age of process in seconds                                     */
 #define SYSCALL_GETAGE 011
 
 /* JOINPID puts a process on hold (by blocking as it waits to read a    *
@@ -107,7 +113,9 @@
 
 /* ---- octal codes starting with 2 are for interprocess messaging ---- */
 
-/* SEND sends a message to a mailbox; it takes these parameters:        *
+/* SEND sends a message of a set priority and type to a named mailbox   *
+ *                                                                      *
+ * SEND takes these parameters:                                         *
  * - C-string: destination mailbox name                                 *
  * - int: priority                                                      *
  * - int: message type                                                  *
@@ -116,18 +124,32 @@
 #define SYSCALL_SEND 020
 
 /* CHECK queries the server to find out how many C-strings of a given   *
- * priority level and message type are waiting in its mailbox; it takes *
- * these parameters:                                                    *
+ * priority level and message type and from a given sender (send an     *
+ * empty string to check for messages from all senders) are waiting in  *
+ * its mailbox;                                                         *
+ *                                                                      *
+ * CHECK takes these parameters:                                        *
  * - int: priority to check for                                         *
- * - int: message type to check for                                     */
+ * - int: message type to check for                                     *
+ * - C-string: sender mailbox name to check for                         */
 #define SYSCALL_CHECK 021
 
-/* FETCH gets the first message of the given priority and type waiting  *
- * in the named mailbox and removes it from the message queue; it takes *
- * these parameters:                                                    *
+/* RECV gets the first message of the given priority, message type, and *
+ * sender mailbox waiting in the client's mailbox and removes it from   *
+ * the message queue; if no qualifying message is waiting, nothing is   *
+ * returned and the client blocks.                                      *
+ *                                                                      *
+ * RECV takes these parameters:                                         *
  * - int: priority                                                      *
- * - int: message type                                                  */
-#define SYSCALL_FETCH 022
+ * - int: message type                                                  *
+ * - C-string: sender mailbox name                                      *
+ * response takes the following form                                    *
+ * - int: priority                                                      *
+ * - int: message type                                                  *
+ * - C-string: sender mailbox name                                      *
+ * - int: number of lines                                               *
+ * - (n) C-strings: the message                                         */
+#define SYSCALL_RECV 022
 
 /* CONFIGURE sets mailbox parameters -- the user sets as many           *
  * C-string key-value pairs as they like; takes these param's:          *

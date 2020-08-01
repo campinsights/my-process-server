@@ -1,8 +1,10 @@
 /* allow strings to contain up to 120 characters, about one line of *
  * text on a wide terminal screen                                   */
-#ifndef STRING_SIZE
 #define STRING_SIZE 121  
-#endif
+
+/* define a "short string" as just long enoguh to encode a priority *
+ * or type code                                                     */
+#define SHORT_STRING 16
 
 #ifndef IPCMSG_H_INCLUDED
 #define IPCMSG_H_INCLUDED
@@ -31,6 +33,9 @@
 
 /* "ALL" = get messages of all priority levels                      */
 #define PRIORITY_ALL        -1
+
+/* function to interpret priority code as a string                  */
+void pri_str(char * priority_string, int priority_code);
 
 
 /* ==== define message types -------------------------------------- *
@@ -61,6 +66,9 @@
 /* "ALL" = get messages of all types                                */
 #define TYPE_ALL            -1
 
+/* function to interpret type code as a string                      */
+void typ_str(char * type_string, int type_code);
+
 
 /* ==== define IPC MESSAGE LINES as a linked list ----------------- *
  * Each node is one line of text (up to 120 characters) plus a link *
@@ -72,15 +80,16 @@ struct Line
 };
 
 /* ==== define IPC MESSAGE QUEUE as a linked list ----------------- *
- * Each node is a message. Each message has a priority, a message   *
- * type, a sub-list of message lines, and pointers to the prev. and *
- * next messages in the list                                        */
+ * Each node is a message. Each message has a sender identity, a    *
+ * priority, a message type, a sub-list of message lines, and       *
+ * pointers to the prev. and next messages in the list              */
 struct Message
 {
+    char sender_mbox[STRING_SIZE];
     int priority;
     int type;
-    int lines;
-    struct Line *firstLine; 
+    int num_lines;
+    struct Line *first_line; 
     struct Message *prev;
     struct Message *next;
 };
@@ -93,7 +102,7 @@ struct Message
 struct Mailbox
 {
     char mbox_name[STRING_SIZE];
-    struct Message *msg_queue;
+    struct Message *first_msg;
     struct Mailbox *prev;
     struct Mailbox *next;
 };
@@ -118,14 +127,22 @@ struct Mailbox * get_mbox(struct Mailbox * head, char * mbox_name);
  * or NULL if the list does not contain that position index         */
 struct Mailbox * get_mbox_at(struct Mailbox * head, int list_posn);
 
-/* this function determines how many total messages are waiting in  *
- * a mailbox's message queue with the specified priority and type   */
-int num_waiting_msgs(struct Mailbox * mbox, int priority, int type);
+/* this function determines how many messages of the given priority *
+ * and type are waiting in a mailbox's message queue                */
+int num_waiting_msgs(struct Mailbox * mbox, int priority, int type, char *sender);
+
+/* this function retrieves the first waiting message of a given     *
+ * priority and type then removes that message from the list        */
+struct Message * fetch_first_message(struct Mailbox * mbox, int priority, int type, char *sender);
+
+/* this function creates a new message with the specified priority  *
+ * and type, adding it as a node after the node specified by 'prev' */
+struct Message * new_message(int priority, int type, char *sender, struct Message * prev);
 
 /* this function adds a new message with the specified priority and *
  * type to the message queue whose head is specified by 'head'; it  *
  * returns the new message                                          */
-struct Message * add_message(struct Mailbox * mbox, int priority, int type);
+struct Message * add_message(struct Mailbox * mbox, int priority, int type, char *sender);
 
 /* this function adds a line of text to an existing message; it     *
  * returns the number of lines in the message                       */

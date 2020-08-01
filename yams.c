@@ -1,4 +1,4 @@
-#include "ipc_headers.h"
+#include "yams_headers.h"
 #include "fio_handlers.h"
 #include "ipc_messaging.h"
 
@@ -120,7 +120,7 @@ void send_message()
         }
     }
     // send what we have of the sys call params so far:
-    printf("<- message to: %s, priority: %d, type %d\n", mbox_name, priority, type);
+    printf("<- sending message to: %s with priority %d and type %d\n", mbox_name, priority, type);
     write_string(fd_commchannel, mbox_name);
     write_int(fd_commchannel, &priority);
     write_int(fd_commchannel, &type);
@@ -154,7 +154,9 @@ void check_messages()
      * int: message type                            */
     char input;
     int priority, type;
-    printf("Message priority [(S)PAM, (B)ATCH, (N)ORMAL, (I)NTERRUPT, (A)LL]? ");
+    char sender[STRING_SIZE];
+    
+    printf("Check for messages of what priority [(S)PAM, (B)ATCH, (N)ORMAL, (I)NTERRUPT, (A)LL]? ");
     //clear residual newline character:
     scanf("%c", &input);
     //now get actual data:
@@ -184,7 +186,7 @@ void check_messages()
     //send requested priority to server:
     write_int(fd_commchannel, &priority);
     
-    printf("Message type? [(I)NFO, RE(Q)UEST, (S)TATUS, (R)ESULT, (A)LL] ");
+    printf("Check for messages of what type [(I)NFO, RE(Q)UEST, (S)TATUS, (R)ESULT, (A)LL]? ");
     //clear residual newline character:
     scanf("%c", &input);
     //now get actual data:
@@ -214,15 +216,134 @@ void check_messages()
     //send requested message type to server:
     write_int(fd_commchannel, &type);
 
-    printf("<- Sent CHECK request to server\n");
+    printf("Check for messages from what sender mailbox [type '*' for all]? ");
+    scanf("%s", sender);
+    write_string(fd_commchannel, sender);
+
+    printf("<- Sent CHECK(%d, %d, %s) request to server\n", priority, type, sender);
     // read and echo server response:
     read_string_and_echo();
+}
+
+void fetch_message()
+{
+    /* send syscall FETCH                           *
+     * parameters:                                  *
+     * int: priority level                          *
+     * int: message type                            */
+    char input;
+    int priority, type;
+    char sender[STRING_SIZE];
+    
+    printf("Receive message of what priority [(S)PAM, (B)ATCH, (N)ORMAL, (I)NTERRUPT, (A)LL]? ");
+    //clear residual newline character:
+    scanf("%c", &input);
+    //now get actual data:
+    scanf("%c", &input);
+    switch (input)
+    {
+    case 's':
+    case 'S':
+        priority = PRIORITY_SPAM;
+        break;
+    case 'b':
+    case 'B':
+        priority = PRIORITY_BATCH;
+        break;
+    case 'n':
+    case 'N':
+        priority = PRIORITY_NORMAL;
+        break;
+    case 'i':
+    case 'I':
+        priority = PRIORITY_INTERRUPT;
+        break;
+    default:
+        priority = PRIORITY_ALL;
+        break;
+    }
+    //send requested priority to server:
+    write_int(fd_commchannel, &priority);
+    
+    printf("Receive message of what type? [(I)NFO, RE(Q)UEST, (S)TATUS, (R)ESULT, (A)LL] ");
+    //clear residual newline character:
+    scanf("%c", &input);
+    //now get actual data:
+    scanf("%c", &input);
+    switch (input)
+    {
+    case 'i':
+    case 'I':
+        type = TYPE_INFO;
+        break;        
+    case 'q':
+    case 'Q':
+        type = TYPE_REQUEST;
+        break;
+    case 's':
+    case 'S':
+        type = TYPE_STATUS;
+        break;
+    case 'r':
+    case 'R':
+        type = TYPE_RESULT;
+        break;
+    default:
+        type = TYPE_ALL;
+        break;
+    }
+    //send requested message type to server:
+    write_int(fd_commchannel, &type);
+
+    printf("Receive message from what sender mailbox [type '*' for all]? ");
+    scanf("%s", sender);
+    write_string(fd_commchannel, sender);
+
+
+    printf("<- Sent FETCH(%d, %d, %s) request to server\n", priority, type, sender);
+
+    /* response takes the following form                                    *
+     * - int: priority                                                      *
+     * - int: message type                                                  *
+     * - C-string: sender mailbox name                                      *
+     * - int: number of lines                                               *
+     * - (n) C-strings: the message                                         */
+    // read response from the server:
+    int num_lines;
+    char pri[SHORT_STRING], typ[SHORT_STRING];
+    read_int(fd_incoming, &priority);
+    pri_str(pri, priority);
+    read_int(fd_incoming, &type);
+    typ_str(typ, type);
+    read_string(fd_incoming, sender, STRING_SIZE);
+    read_int(fd_incoming, &num_lines);
+    if (num_lines == 0)
+    {
+        printf("-> Your mailbox contained an empty message:\n");
+        printf("of priority %s, type %s, from mailbox %s\n", pri, typ, sender);
+    }
+    else
+    {
+        printf("-> %d-line message follows:\n", num_lines);
+        printf("====----\n");
+        printf("PRIORITY: %s\n", pri);
+        printf("TYPE: %s\n", typ);
+        printf("SENDER: %s\n", sender);
+        printf("====----\n");
+        for (int i = 0; i < num_lines; i++)
+        {
+            char message_line[STRING_SIZE];
+            read_string(fd_incoming, message_line, STRING_SIZE);
+            printf("%s\n", message_line);
+        }
+        printf("====----\n");
+    }
 }
 
 int main()
 {
     // greet the user
-    printf("-~= Welcome to my process communication server! =~-\n");
+    printf("-~= Welcome to Yet Another Messaging Service =~-\n");
     
     // ask user to specify mailbox name:
     char mailbox_name[STRING_SIZE];
@@ -230,9 +351,9 @@ int main()
     scanf("%s", mailbox_name);
     
     // open FIFO for reading incoming connections:
-    printf("IPCC: opening syscall FIFO at %s\n", SERVER_FIFO_1);
+    printf("YAMS client: opening syscall FIFO at %s\n", SERVER_FIFO_1);
     fd_syscall = open(SERVER_FIFO_1, O_WRONLY);
-    printf("IPCC: opening comm-channel FIFO at %s\n", SERVER_FIFO_1);
+    printf("YAMS client: opening comm-channel FIFO at %s\n", SERVER_FIFO_1);
     fd_commchannel = open(SERVER_FIFO_2, O_WRONLY);
 
     // get PID for sending to server:
@@ -245,19 +366,19 @@ int main()
 
     /* send CONNECT syscall                         *
      * parameters: int: PID, C-string: mailbox name */
-    printf("IPCC: logging into process server\n");
+    printf("YAMS client: logging into process server\n");
     int syscall_code = SYSCALL_CONNECT;
     write(fd_syscall, &syscall_code, sizeof(int));
     write(fd_syscall, &my_linux_PID, sizeof(int));
     write_string(fd_commchannel, mailbox_name);
     
     // open FIFO for reading incoming connections:
-    printf("IPCC: creating and opening client FIFO at %s\n", client_fifo_name);
+    printf("YAMS client: creating and opening client FIFO at %s\n", client_fifo_name);
     fd_incoming = open(client_fifo_name, O_RDONLY);
 
     // read and report server connection:
     read_int(fd_incoming, &my_client_PID);
-    printf("IPCC: process server confirmed connection and gave me PID #%d.\n", my_client_PID);
+    printf("YAMS client: process server confirmed connection and gave me PID #%d.\n", my_client_PID);
 
     // now that server is connected, go into input-action loop:
     while (syscall_code != SYSCALL_EXIT && syscall_code != SYSCALL_SHUTDOWN)
@@ -267,7 +388,7 @@ int main()
         printf("Enter a system call (%d = ping server, ", SYSCALL_PING);
         printf("%d = disconnect and exit, %d = kill server and exit,\n", SYSCALL_EXIT, SYSCALL_SHUTDOWN);
         printf("%d = send message, %d = check for messages, ", SYSCALL_SEND, SYSCALL_CHECK);
-        printf("%d = fetch first message, %d = configure mailbox,\n", SYSCALL_FETCH, SYSCALL_CONFIGURE);
+        printf("%d = fetch first message, %d = configure mailbox,\n", SYSCALL_RECV, SYSCALL_CONFIGURE);
         printf("%d = get PID, %d = get age, %d = join PID, ", SYSCALL_GETPID, SYSCALL_GETAGE, SYSCALL_JOINPID);
         printf("%d = wait PID, %d = signal PID): ", SYSCALL_WAIT, SYSCALL_SIGNAL);
         // read user's choice:
@@ -347,12 +468,8 @@ int main()
             case SYSCALL_CHECK:
                 check_messages();
                 break;
-            case SYSCALL_FETCH:
-                /* send syscall FETCH                      *
-                 * no parameters                           */
-                printf("<- Sent FETCH request to server\n");
-                // read and echo server response:
-                read_string_and_echo();
+            case SYSCALL_RECV:
+                fetch_message();
                 break;
             case SYSCALL_GETPID:
                 /* send syscall GETPID                     *
@@ -412,7 +529,6 @@ int main()
                 // read and echo server response:
                 read_string_and_echo();
         }
-        
     }
 
     /* clean up our files on the way out */
